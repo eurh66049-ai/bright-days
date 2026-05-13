@@ -82,7 +82,7 @@ Allow: /*.webp$
 Allow: /*.svg$
 
 # Sitemap location
-Sitemap: https://kotobi.xyz/sitemap.xml
+Sitemap: https://cozy-kind-keeper.lovable.app/sitemap.xml
 
 # Host (preferred domain)
-Host: https://kotobi.xyz
+Host: https://cozy-kind-keeper.lovable.app
