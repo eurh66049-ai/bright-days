@@ -15,6 +15,3 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
     autoRefreshToken: true,
   }
 });
-
-// Alias for code paths that call edge functions; same client instance.
-export const supabaseFunctions = supabase;
