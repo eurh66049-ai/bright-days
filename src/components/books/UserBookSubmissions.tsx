@@ -1,8 +1,8 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { BookOpen, RefreshCw, Upload, Edit, Trash2 } from 'lucide-react';
+import { BookOpen, RefreshCw, Upload, Edit, Trash2, LoaderCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/hooks/use-toast';
@@ -34,6 +34,11 @@ interface BookSubmission {
 const UserBookSubmissions: React.FC = () => {
   const [submissions, setSubmissions] = useState<BookSubmission[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 24;
+  const loadMoreRef = useRef<HTMLDivElement>(null);
   
   // تحميل مسبق لصور كتب المستخدم - 24 دفعة واحدة
   useCategoryImagesPreloader(submissions.map(s => ({ cover_image_url: s.cover_image_url })));
@@ -44,7 +49,7 @@ const UserBookSubmissions: React.FC = () => {
 
   useEffect(() => {
     if (user) {
-      fetchUserSubmissions();
+      fetchUserSubmissions(0, false);
     }
   }, [user]);
 
@@ -52,7 +57,7 @@ const UserBookSubmissions: React.FC = () => {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden && user) {
-        fetchUserSubmissions();
+        fetchUserSubmissions(0, false);
       }
     };
 
@@ -62,19 +67,25 @@ const UserBookSubmissions: React.FC = () => {
     };
   }, [user]);
 
-  const fetchUserSubmissions = async () => {
+  const fetchUserSubmissions = async (pageNum: number = 0, append: boolean = false) => {
     if (!user) return;
-    
-    setLoading(true);
+
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
     try {
-      // جلب الكتب الأصلية فقط (استثناء طلبات التعديل)
+      // جلب الكتب الأصلية فقط (استثناء طلبات التعديل) مع ترقيم الصفحات
+      const from = pageNum * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
       const { data, error } = await supabase
         .from('book_submissions')
         .select('*')
         .eq('user_id', user.id)
         .eq('is_edit_request', false) // استثناء طلبات التعديل
         .order('created_at', { ascending: false })
-        .limit(50);
+        .range(from, to);
 
       if (error) {
         console.error('خطأ في جلب طلبات الكتب:', error);
@@ -111,22 +122,40 @@ const UserBookSubmissions: React.FC = () => {
             actualStatus: book.status
           };
         }));
-        
-        setSubmissions(enrichedData);
-        
-        // تحديث الإحصائيات
-        const pendingCount = enrichedData.filter(s => s.status === 'pending' || s.status === 'pending_edit').length;
-        const approvedCount = enrichedData.filter(s => s.status === 'approved').length;
-        const rejectedCount = enrichedData.filter(s => s.status === 'rejected').length;
-        
-        console.log(`إحصائيات الكتب المرفوعة: ${pendingCount} في الانتظار، ${approvedCount} مقبولة، ${rejectedCount} مرفوضة`);
+
+        if (append) {
+          setSubmissions(prev => [...prev, ...enrichedData]);
+        } else {
+          setSubmissions(enrichedData);
+        }
+        setHasMore((data || []).length === PAGE_SIZE);
+        setPage(pageNum);
       }
     } catch (error) {
       console.error('خطأ غير متوقع:', error);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
+
+  // مراقب التمرير للتحميل التلقائي
+  useEffect(() => {
+    if (!hasMore || loading) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !loadingMore && hasMore) {
+          fetchUserSubmissions(page + 1, true);
+        }
+      },
+      { threshold: 0.1, rootMargin: '200px' }
+    );
+    const node = loadMoreRef.current;
+    if (node) observer.observe(node);
+    return () => {
+      if (node) observer.unobserve(node);
+    };
+  }, [hasMore, loading, loadingMore, page, user]);
 
   const handleDeleteBook = async (bookId: string) => {
     try {
@@ -428,6 +457,7 @@ const UserBookSubmissions: React.FC = () => {
           </CardContent>
         </Card>
       ) : (
+        <>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {submissions.map((submission) => (
             <Card 
@@ -647,6 +677,12 @@ const UserBookSubmissions: React.FC = () => {
             </Card>
           ))}
         </div>
+        {hasMore && (
+          <div ref={loadMoreRef} className="flex justify-center items-center py-8">
+            {loadingMore && <LoaderCircle className="h-8 w-8 text-book-primary animate-spin" />}
+          </div>
+        )}
+        </>
       )}
     </div>
   );
