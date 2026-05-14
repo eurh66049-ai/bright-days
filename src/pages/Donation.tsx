@@ -46,8 +46,13 @@ const Donation = () => {
         });
         const cfg = await res.json();
         if (cancelled) return;
-        if (!cfg.clientId) {
-          toast({ title: "تنبيه", description: "لم يتم ضبط مفتاح PayPal على الخادم.", variant: "destructive" });
+        const isPlaceholder = !cfg.clientId || /placeholder/i.test(String(cfg.clientId));
+        if (isPlaceholder) {
+          toast({
+            title: "PayPal غير مُهيّأ",
+            description: "مفاتيح PayPal على Supabase ما زالت قيماً مؤقتة (PLACEHOLDER). يجب تعيين PAYPAL_CLIENT_ID و PAYPAL_CLIENT_SECRET و PAYPAL_ENV الحقيقية في Edge Functions Secrets.",
+            variant: "destructive",
+          });
           return;
         }
         setPaypalEnv(cfg.env || "live");
