@@ -439,7 +439,7 @@ const UserBookSubmissions: React.FC = () => {
         <Button 
           variant="outline" 
           size="sm" 
-          onClick={fetchUserSubmissions}
+          onClick={() => fetchUserSubmissions(0, false)}
           disabled={loading}
         >
           <RefreshCw className="h-4 w-4 ml-1" />
