@@ -16,5 +16,5 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
   }
 });
 
-// Backwards-compat alias used across the codebase.
-export const supabaseFunctions = supabase.functions;
+// Backwards-compat alias used across the codebase: usage is `supabaseFunctions.functions.invoke(...)`.
+export const supabaseFunctions = supabase;
