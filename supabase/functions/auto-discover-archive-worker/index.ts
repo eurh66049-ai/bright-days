@@ -111,28 +111,32 @@ serve(async (req) => {
 
     if (countErr) throw new Error(countErr.message);
 
-    const threshold = config.min_pending_threshold || 100;
+    const threshold = config.min_pending_threshold || 0;
     const pending = pendingCount || 0;
-
-    if (pending >= threshold) {
-      // الطابور ممتلئ بما يكفي - لا داعي لجلب المزيد الآن
+    // ★ التدفق المستمر: لا نوقف الاكتشاف عند امتلاء الطابور.
+    // فقط نتجنب الانفجار الكامل إذا تجاوز الطابور 5000 معلّق.
+    const HARD_CAP = 5000;
+    if (pending >= HARD_CAP) {
       await supabase.from("auto_discover_config").update({
         last_run_at: new Date().toISOString(),
-        last_status: `قائمة الانتظار ممتلئة (${pending}/${threshold})، تم التخطي`,
+        last_status: `الطابور بلغ الحد الأقصى (${pending}/${HARD_CAP}) — توقف مؤقت`,
         last_error: null,
       }).eq("id", 1);
-      return new Response(JSON.stringify({ success: true, skipped: true, pending, threshold }), {
+      return new Response(JSON.stringify({ success: true, skipped: true, pending, hard_cap: HARD_CAP }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // 3) تحضير استعلام Archive.org — نستخدم استعلام المستخدم المخصص (تصنيف/موضوع)
-    // إن وُجد، وإلا نعود للاستعلام الافتراضي لكل الكتب العربية.
-    const userQ = (config.search_query || "").toString().trim();
+    // 3) تحضير الاستعلام الحالي من قائمة الكلمات (cycling).
+    // إن لم تكن هنالك قائمة، نعود لاستعلام واحد قديم.
+    const queriesList: string[] = Array.isArray(config.search_queries) && config.search_queries.length > 0
+      ? (config.search_queries as string[]).map((s) => String(s || "").trim()).filter(Boolean)
+      : [(config.search_query || DEFAULT_ARABIC_ARCHIVE_QUERY).toString()];
+    const totalQueries = queriesList.length;
+    let queryIndex = ((config.current_query_index ?? 0) % totalQueries + totalQueries) % totalQueries;
+    const userQ = (queriesList[queryIndex] || "").toString().trim();
     let archiveQuery = DEFAULT_ARABIC_ARCHIVE_QUERY;
     if (userQ && userQ !== DEFAULT_ARABIC_ARCHIVE_QUERY) {
-      // إن لم يحتوِ المستخدم على فلاتر Lucene، نُحسّن استعلامه عبر Mistral
-      // ونضمن وجود فلاتر mediatype/format/language
       const looksLikeLucene = /[:()]/.test(userQ);
       const refined = looksLikeLucene ? userQ : await refineQueryWithMistral(userQ);
       let q = refined;
@@ -392,8 +396,7 @@ serve(async (req) => {
       "reviewdate desc", "titleSorter asc",
     ];
     const chosenSort = SORT_OPTIONS[Math.floor(Math.random() * SORT_OPTIONS.length)];
-    const shouldForceResetForDefaultQuery = (config.search_query || "").trim() !== DEFAULT_ARABIC_ARCHIVE_QUERY;
-    const shouldResetCursor = shouldForceResetForDefaultQuery || !config.cursor || Math.random() < 0.35;
+    const shouldResetCursor = !config.cursor || Math.random() < 0.20;
 
     const STARTED_AT = Date.now();
     const MAX_MS = 90_000;
@@ -508,15 +511,35 @@ serve(async (req) => {
     }
 
     const inserted = fresh.length;
-    const nextCursor = exhausted ? null : cursor;
+    // ★ منطق التنقل بين الكلمات:
+    // - عند نفاد نتائج الكلمة الحالية (exhausted) → ننتقل للكلمة التالية ونُصفّر المؤشر.
+    // - أو إذا لم نجد أي كتاب جديد بعد فحص كثير من النتائج (totalScanned كبير و inserted=0)
+    //   → احتمال 50% للانتقال للكلمة التالية لتجنّب الجمود.
+    let nextIndex = queryIndex;
+    let nextCursor: string | null = exhausted ? null : cursor;
+    let advanced = false;
+    if (totalQueries > 1) {
+      if (exhausted) {
+        nextIndex = (queryIndex + 1) % totalQueries;
+        nextCursor = null;
+        advanced = true;
+      } else if (inserted === 0 && totalScanned >= batchSize * 2 && Math.random() < 0.5) {
+        nextIndex = (queryIndex + 1) % totalQueries;
+        nextCursor = null;
+        advanced = true;
+      }
+    }
+
+    const currentKw = queriesList[queryIndex];
+    const nextKw = queriesList[nextIndex];
 
     // 6) تحديث المؤشر والإحصاءات
     await supabase.from("auto_discover_config").update({
-      search_query: DEFAULT_ARABIC_ARCHIVE_QUERY,
       cursor: nextCursor,
+      current_query_index: nextIndex,
       total_discovered: (config.total_discovered || 0) + inserted,
       last_run_at: new Date().toISOString(),
-      last_status: `أُضيف ${inserted} كتاب جديد (تم تخطي ${totalAlreadyKnown} مكرر و ${totalSkippedNoTitle} بدون اسم/PDF صالح من ${totalScanned} نتيجة، المعلّق: ${pending})${exhausted ? " — اكتملت دورة البحث" : ""}`,
+      last_status: `[${currentKw}] أُضيف ${inserted} (مكرر ${totalAlreadyKnown}، بدون اسم/PDF ${totalSkippedNoTitle} من ${totalScanned} نتيجة، المعلّق: ${pending})${advanced ? ` ← التالي: [${nextKw}]` : exhausted ? " — اكتملت" : ""}`,
       last_error: null,
     }).eq("id", 1);
 
@@ -529,6 +552,9 @@ serve(async (req) => {
       pending_before: pending,
       next_cursor: nextCursor,
       exhausted,
+      current_query: currentKw,
+      next_query: nextKw,
+      advanced,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
   } catch (err) {
