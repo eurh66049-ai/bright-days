@@ -138,7 +138,11 @@ serve(async (req) => {
     let archiveQuery = DEFAULT_ARABIC_ARCHIVE_QUERY;
     if (userQ && userQ !== DEFAULT_ARABIC_ARCHIVE_QUERY) {
       const looksLikeLucene = /[:()]/.test(userQ);
-      const refined = looksLikeLucene ? userQ : await refineQueryWithMistral(userQ);
+      // للاكتشاف المستمر لا نعتمد على AI لتحويل الكلمات البسيطة؛ أحياناً ينتج استعلاماً ضيقاً
+      // يرجع 0 نتيجة. نبني Lucene ثابتاً يضمن البحث داخل مجموعة الكتب العربية.
+      const refined = looksLikeLucene
+        ? userQ
+        : `(${userQ}) AND collection:booksbylanguage_arabic AND mediatype:texts AND format:PDF`;
       let q = refined;
       if (!/mediatype/i.test(q)) q += " AND mediatype:(texts)";
       if (!/format/i.test(q)) q += " AND format:(PDF)";
@@ -146,9 +150,11 @@ serve(async (req) => {
       archiveQuery = q;
     }
 
+    const scrapeCount = 100; // archive.org scrape يتطلب count >= 100
     const batchSize = Math.min(config.batch_size || 100, 200);
     // الهدف: عدد الكتب الجديدة التي نريد إضافتها هذا التشغيل
-    const targetFresh = Math.max(threshold - pending, batchSize);
+    // نضيف دفعة صغيرة آمنة كل تشغيل حتى لا تتجاوز الدالة حد CPU، ثم يكررها cron/التشغيل اليدوي.
+    const targetFresh = Math.max(threshold - pending, Math.min(batchSize, 10));
 
     // كشف العناوين العشوائية / أسماء الملفات / السلاسل غير المفهومة
     function isRealTitle(t: string | null | undefined, identifier: string): boolean {
@@ -306,35 +312,8 @@ serve(async (req) => {
     // ذاكرة جلسة للعناوين المُطبَّعة (للتكرار النصي)
     const sessionTitles = new Set<string>();
 
-    // كشف تكرار العنوان: يجلب جميع العناوين المُطبَّعة من approved_books و bulk_upload_queue
-    // ويحفظها في ذاكرة الجلسة. يُستدعى مرة واحدة في بداية التشغيل.
-    async function preloadKnownTitles() {
-      const tables: Array<{ table: string; col: string }> = [
-        { table: "approved_books", col: "title" },
-        { table: "bulk_upload_queue", col: "title" },
-      ];
-      for (const { table, col } of tables) {
-        let from = 0;
-        const PAGE = 1000;
-        for (let p = 0; p < 20; p++) {
-          const { data, error } = await supabase
-            .from(table)
-            .select(col)
-            .range(from, from + PAGE - 1);
-          if (error || !data || data.length === 0) break;
-          for (const row of data) {
-            const t = String((row as any)[col] || "").trim();
-            if (t) {
-              const n = normalizeTitle(t);
-              if (n.length >= 4) sessionTitles.add(n);
-            }
-          }
-          if (data.length < PAGE) break;
-          from += PAGE;
-        }
-      }
-    }
-    await preloadKnownTitles();
+    // لا نحمل كل عناوين الموقع هنا لأن ذلك يستهلك CPU كبيراً داخل Edge Function.
+    // كشف تكرار الروابط يتم من قاعدة البيانات، وكشف تكرار العنوان النهائي يتم لاحقاً في bulk-upload-books-ai.
 
 
     // فلترة المعرّفات مقابل قاعدة البيانات قبل أي metadata fetch
@@ -388,19 +367,22 @@ serve(async (req) => {
     // 4) حلقة بحث متعددة الصفحات
     // لتنويع النتائج عبر مئات الآلاف من كتب archive.org، نختار ترتيب مختلف عشوائياً
     // كل تشغيل، ونعيد cursor دورياً (احتمال 35%) لاستكشاف شرائح جديدة.
+    // ملاحظة مهمة: واجهة scrape في archive.org تُرجع أحياناً 200 مع items=[] و
+    // request_error="(no hits returned)" لبعض أنواع الترتيب مثل addeddate desc/downloads/date desc
+    // رغم أن نفس الاستعلام له مئات آلاف النتائج. لذلك نستخدم فقط الترتيبات التي تعيد نتائج فعلاً.
     const SORT_OPTIONS = [
-      "addeddate desc", "addeddate asc",
-      "downloads desc", "week desc",
+      "week desc",
       "publicdate desc", "publicdate asc",
-      "date desc", "date asc",
+      "addeddate asc",
+      "date asc",
       "reviewdate desc", "titleSorter asc",
     ];
-    const chosenSort = SORT_OPTIONS[Math.floor(Math.random() * SORT_OPTIONS.length)];
+    const chosenSort = SORT_OPTIONS[Math.floor(Math.random() * Math.min(3, SORT_OPTIONS.length))];
     const shouldResetCursor = !config.cursor || Math.random() < 0.20;
 
     const STARTED_AT = Date.now();
-    const MAX_MS = 90_000;
-    const MAX_PAGES = 15;
+    const MAX_MS = 45_000;
+    const MAX_PAGES = 2;
     let cursor: string | null = shouldResetCursor ? null : config.cursor;
     let totalScanned = 0;
     let totalAlreadyKnown = 0;
@@ -417,7 +399,7 @@ serve(async (req) => {
       const scrapeUrl = new URL("https://archive.org/services/search/v1/scrape");
       scrapeUrl.searchParams.set("q", archiveQuery);
       scrapeUrl.searchParams.set("fields", "identifier,title,creator");
-      scrapeUrl.searchParams.set("count", String(batchSize));
+      scrapeUrl.searchParams.set("count", String(scrapeCount));
       scrapeUrl.searchParams.set("sorts", chosenSort);
       if (cursor) scrapeUrl.searchParams.set("cursor", cursor);
 
@@ -428,9 +410,12 @@ serve(async (req) => {
         const txt = await archRes.text();
         throw new Error(`archive.org HTTP ${archRes.status}: ${txt.slice(0, 200)}`);
       }
-      const archData = await archRes.json();
+      let archData = await archRes.json();
       const items: Array<{ identifier: string; title: string | string[]; creator?: string | string[] }> =
         Array.isArray(archData?.items) ? archData.items : [];
+      if (items.length === 0 && archData?.request_error && page === 0) {
+        console.warn(`[auto-discover] archive sort returned no hits (${chosenSort}): ${archData.request_error}`);
+      }
       cursor = archData?.cursor || null;
       totalScanned += items.length;
 
@@ -445,7 +430,7 @@ serve(async (req) => {
         continue;
       }
 
-      const CONCURRENCY = 8;
+      const CONCURRENCY = 3;
       let idx = 0;
       let skippedByTitle = 0;
       const pageFresh: Array<{ title: string; book_file_url: string; identifier: string; author: string | null; cover_image_url: string | null }> = [];
