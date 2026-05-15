@@ -19,6 +19,8 @@ interface Config {
   last_run_at: string | null;
   last_status: string | null;
   last_error: string | null;
+  search_queries: string[] | null;
+  current_query_index: number | null;
 }
 
 const AutoDiscoverPanel: React.FC = () => {
@@ -28,8 +30,7 @@ const AutoDiscoverPanel: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [pendingCount, setPendingCount] = useState<number>(0);
-  const [threshold, setThreshold] = useState(100);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [keywordsText, setKeywordsText] = useState('');
   const defaultArabicQuery = 'collection:booksbylanguage_arabic AND mediatype:texts AND format:PDF';
 
   const load = async () => {
@@ -40,10 +41,9 @@ const AutoDiscoverPanel: React.FC = () => {
       .eq('id', 1)
       .maybeSingle();
     if (data) {
-      setCfg(data as Config);
-      setThreshold(data.min_pending_threshold || 100);
-      const sq = (data.search_query || '').toString();
-      setSearchQuery(sq && sq !== defaultArabicQuery ? sq : '');
+      setCfg(data as unknown as Config);
+      const list = Array.isArray((data as any).search_queries) ? (data as any).search_queries as string[] : [];
+      setKeywordsText(list.join('\n'));
     }
     const { count } = await supabase
       .from('bulk_upload_queue')
@@ -74,17 +74,14 @@ const AutoDiscoverPanel: React.FC = () => {
   };
 
   const toggleEnabled = async (checked: boolean) => {
-    const q = (searchQuery || '').trim();
     await save({
       enabled: checked,
-      search_query: q || defaultArabicQuery,
-      min_pending_threshold: threshold,
       cursor: checked ? null : cfg?.cursor,
-    });
+    } as Partial<Config>);
     toast({
       title: checked ? '✅ تم تشغيل الاكتشاف التلقائي' : '⏸️ تم إيقاف الاكتشاف التلقائي',
       description: checked
-        ? 'سيستمر النظام في جلب 100 كتاب جديد كلما أوشك الطابور على الانتهاء — حتى وأنت خارج الموقع.'
+        ? 'سيستمر النظام في جلب الكتب بلا توقف ويتنقّل تلقائياً بين كلمات البحث عند انتهاء كل واحدة.'
         : 'لن يتم جلب كتب جديدة. الكتب الموجودة في الطابور ستستمر في الرفع.',
     });
   };
@@ -111,8 +108,29 @@ const AutoDiscoverPanel: React.FC = () => {
   };
 
   const resetCursor = async () => {
-    await save({ cursor: null });
+    await save({ cursor: null } as Partial<Config>);
     toast({ title: 'تمت إعادة تعيين المؤشر', description: 'سيبدأ الاكتشاف من بداية النتائج في الدورة القادمة.' });
+  };
+
+  const saveKeywords = async () => {
+    const list = keywordsText
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (list.length === 0) {
+      toast({ title: 'القائمة فارغة', description: 'أضف كلمة واحدة على الأقل.', variant: 'destructive' });
+      return;
+    }
+    await save({ search_queries: list, current_query_index: 0, cursor: null } as Partial<Config>);
+    toast({ title: '✅ تم حفظ قائمة الكلمات', description: `${list.length} كلمة — يبدأ من الأولى.` });
+  };
+
+  const skipToNext = async () => {
+    const list = cfg?.search_queries || [];
+    if (list.length < 2) return;
+    const next = (((cfg?.current_query_index ?? 0) + 1) % list.length);
+    await save({ current_query_index: next, cursor: null } as Partial<Config>);
+    toast({ title: '⏭️ تم الانتقال للكلمة التالية', description: list[next] });
   };
 
   if (loading && !cfg) {
@@ -144,10 +162,10 @@ const AutoDiscoverPanel: React.FC = () => {
               عند التفعيل، سيقوم النظام تلقائياً بـ:
             </div>
             <ul className="list-disc pr-5 text-sm space-y-0.5">
-              <li>جلب <strong>100 كتاب</strong> جديد من Archive.org كلما نقص عدد الكتب في الطابور عن الحد الأدنى.</li>
+              <li>جلب الكتب من Archive.org <strong>بلا توقف</strong> كل دقيقة — لا ينتظر فراغ الطابور.</li>
+              <li>التنقّل التلقائي بين كلمات البحث: عند انتهاء كتب كلمة (مثلاً <em>روايات</em>) ينتقل للكلمة التالية تلقائياً.</li>
               <li>إضافتها مباشرة إلى طابور الرفع، ويتولّى المعالج رفعها كل دقيقة.</li>
-              <li>التشغيل مستمر <strong>على الخادم</strong> حتى وأنت خارج الموقع — لا حاجة لإبقاء الصفحة مفتوحة.</li>
-              <li>تتبّع المؤشر تلقائياً لجلب كتب مختلفة في كل مرة بدون تكرار.</li>
+              <li>التشغيل مستمر <strong>على الخادم</strong> حتى وأنت خارج الموقع.</li>
             </ul>
           </AlertDescription>
         </Alert>
@@ -166,40 +184,34 @@ const AutoDiscoverPanel: React.FC = () => {
           />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="rounded-lg border p-3 bg-background space-y-2">
-            <Label htmlFor="auto-discover-query" className="text-xs">
-              تصنيف / موضوع البحث في Archive.org (اختياري)
+        <div className="rounded-lg border p-3 bg-background space-y-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <Label htmlFor="auto-discover-keywords" className="text-xs">
+              قائمة كلمات البحث (كلمة واحدة في كل سطر) — يدور بينها تلقائياً
             </Label>
-            <input
-              id="auto-discover-query"
-              type="text"
-              placeholder="مثال: رواية، تاريخ، فقه، شعر، فلسفة..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onBlur={() => {
-                const q = searchQuery.trim();
-                const next = q || defaultArabicQuery;
-                if (next !== cfg?.search_query) save({ search_query: next, cursor: null });
-              }}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              dir="rtl"
-            />
-            <div className="text-xs text-muted-foreground">
-              اتركه فارغاً لجلب كل الكتب العربية. عند التغيير، تتم إعادة المؤشر تلقائياً.
-            </div>
+            {cfg?.search_queries && cfg.search_queries.length > 0 && (
+              <Badge variant="secondary" className="text-xs">
+                الحالية: {cfg.search_queries[(cfg.current_query_index ?? 0) % cfg.search_queries.length]} ({(cfg.current_query_index ?? 0) + 1}/{cfg.search_queries.length})
+              </Badge>
+            )}
           </div>
-          <div>
-            <Label className="text-xs">الحد الأدنى للطابور (يُجلب دفعة جديدة عند النزول تحته)</Label>
-            <input
-              type="number"
-              min={10}
-              max={1000}
-              value={threshold}
-              onChange={(e) => setThreshold(Math.max(10, Math.min(1000, parseInt(e.target.value, 10) || 100)))}
-              onBlur={() => threshold !== cfg?.min_pending_threshold && save({ min_pending_threshold: threshold })}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-            />
+          <textarea
+            id="auto-discover-keywords"
+            value={keywordsText}
+            onChange={(e) => setKeywordsText(e.target.value)}
+            placeholder={"روايات\nتاريخ\nفقه\nشعر\nفلسفة"}
+            rows={8}
+            className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+            dir="rtl"
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={saveKeywords} disabled={saving} size="sm">حفظ القائمة</Button>
+            <Button onClick={skipToNext} disabled={saving || !cfg?.search_queries || cfg.search_queries.length < 2} variant="outline" size="sm">
+              ⏭️ تخطّي للكلمة التالية
+            </Button>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            عند انتهاء كتب كلمة ينتقل تلقائياً للكلمة التالية. يدعم الكلمات العربية البسيطة أو استعلامات Archive.org Lucene.
           </div>
         </div>
 
