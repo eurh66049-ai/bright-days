@@ -154,7 +154,7 @@ serve(async (req) => {
     const batchSize = Math.min(config.batch_size || 100, 200);
     // الهدف: عدد الكتب الجديدة التي نريد إضافتها هذا التشغيل
     // نضيف دفعة صغيرة آمنة كل تشغيل حتى لا تتجاوز الدالة حد CPU، ثم يكررها cron/التشغيل اليدوي.
-    const targetFresh = Math.max(threshold - pending, Math.min(batchSize, 30));
+    const targetFresh = Math.max(threshold - pending, Math.min(batchSize, 10));
 
     // كشف العناوين العشوائية / أسماء الملفات / السلاسل غير المفهومة
     function isRealTitle(t: string | null | undefined, identifier: string): boolean {
@@ -377,12 +377,12 @@ serve(async (req) => {
       "date asc",
       "reviewdate desc", "titleSorter asc",
     ];
-    const chosenSort = SORT_OPTIONS[Math.floor(Math.random() * SORT_OPTIONS.length)];
+    const chosenSort = SORT_OPTIONS[Math.floor(Math.random() * Math.min(3, SORT_OPTIONS.length))];
     const shouldResetCursor = !config.cursor || Math.random() < 0.20;
 
     const STARTED_AT = Date.now();
-    const MAX_MS = 90_000;
-    const MAX_PAGES = 15;
+    const MAX_MS = 45_000;
+    const MAX_PAGES = 2;
     let cursor: string | null = shouldResetCursor ? null : config.cursor;
     let totalScanned = 0;
     let totalAlreadyKnown = 0;
