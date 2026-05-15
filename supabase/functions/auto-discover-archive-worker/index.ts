@@ -430,7 +430,7 @@ serve(async (req) => {
         continue;
       }
 
-      const CONCURRENCY = 8;
+      const CONCURRENCY = 3;
       let idx = 0;
       let skippedByTitle = 0;
       const pageFresh: Array<{ title: string; book_file_url: string; identifier: string; author: string | null; cover_image_url: string | null }> = [];
