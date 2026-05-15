@@ -399,7 +399,7 @@ serve(async (req) => {
       const scrapeUrl = new URL("https://archive.org/services/search/v1/scrape");
       scrapeUrl.searchParams.set("q", archiveQuery);
       scrapeUrl.searchParams.set("fields", "identifier,title,creator");
-      scrapeUrl.searchParams.set("count", String(batchSize));
+      scrapeUrl.searchParams.set("count", String(scrapeCount));
       scrapeUrl.searchParams.set("sorts", chosenSort);
       if (cursor) scrapeUrl.searchParams.set("cursor", cursor);
 
