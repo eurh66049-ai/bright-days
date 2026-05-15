@@ -393,13 +393,13 @@ serve(async (req) => {
     // لتنويع النتائج عبر مئات الآلاف من كتب archive.org، نختار ترتيب مختلف عشوائياً
     // كل تشغيل، ونعيد cursor دورياً (احتمال 35%) لاستكشاف شرائح جديدة.
     // ملاحظة مهمة: واجهة scrape في archive.org تُرجع أحياناً 200 مع items=[] و
-    // request_error="(no hits returned)" لبعض أنواع الترتيب مثل addeddate desc/downloads desc
+    // request_error="(no hits returned)" لبعض أنواع الترتيب مثل addeddate desc/downloads/date desc
     // رغم أن نفس الاستعلام له مئات آلاف النتائج. لذلك نستخدم فقط الترتيبات التي تعيد نتائج فعلاً.
     const SORT_OPTIONS = [
       "week desc",
       "publicdate desc", "publicdate asc",
       "addeddate asc",
-      "date desc", "date asc",
+      "date asc",
       "reviewdate desc", "titleSorter asc",
     ];
     const chosenSort = SORT_OPTIONS[Math.floor(Math.random() * SORT_OPTIONS.length)];
