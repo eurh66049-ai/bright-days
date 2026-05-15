@@ -388,10 +388,13 @@ serve(async (req) => {
     // 4) حلقة بحث متعددة الصفحات
     // لتنويع النتائج عبر مئات الآلاف من كتب archive.org، نختار ترتيب مختلف عشوائياً
     // كل تشغيل، ونعيد cursor دورياً (احتمال 35%) لاستكشاف شرائح جديدة.
+    // ملاحظة مهمة: واجهة scrape في archive.org تُرجع أحياناً 200 مع items=[] و
+    // request_error="(no hits returned)" لبعض أنواع الترتيب مثل addeddate desc/downloads desc
+    // رغم أن نفس الاستعلام له مئات آلاف النتائج. لذلك نستخدم فقط الترتيبات التي تعيد نتائج فعلاً.
     const SORT_OPTIONS = [
-      "addeddate desc", "addeddate asc",
-      "downloads desc", "week desc",
+      "week desc",
       "publicdate desc", "publicdate asc",
+      "addeddate asc",
       "date desc", "date asc",
       "reviewdate desc", "titleSorter asc",
     ];
@@ -428,9 +431,12 @@ serve(async (req) => {
         const txt = await archRes.text();
         throw new Error(`archive.org HTTP ${archRes.status}: ${txt.slice(0, 200)}`);
       }
-      const archData = await archRes.json();
+      let archData = await archRes.json();
       const items: Array<{ identifier: string; title: string | string[]; creator?: string | string[] }> =
         Array.isArray(archData?.items) ? archData.items : [];
+      if (items.length === 0 && archData?.request_error && page === 0) {
+        console.warn(`[auto-discover] archive sort returned no hits (${chosenSort}): ${archData.request_error}`);
+      }
       cursor = archData?.cursor || null;
       totalScanned += items.length;
 
