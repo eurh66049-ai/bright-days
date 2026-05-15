@@ -45,6 +45,8 @@ interface Config {
   batch_size: number;
   min_pending_threshold: number;
   total_discovered: number;
+  search_queries?: string[] | null;
+  current_query_index?: number | null;
 }
 
 // تحسين الاستعلام عبر Mistral (اختياري)

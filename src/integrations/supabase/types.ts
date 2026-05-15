@@ -306,6 +306,7 @@ export type Database = {
         Row: {
           batch_size: number
           created_at: string
+          current_query_index: number
           cursor: string | null
           enabled: boolean
           id: number
@@ -313,6 +314,7 @@ export type Database = {
           last_run_at: string | null
           last_status: string | null
           min_pending_threshold: number
+          search_queries: Json
           search_query: string
           total_discovered: number
           updated_at: string
@@ -320,6 +322,7 @@ export type Database = {
         Insert: {
           batch_size?: number
           created_at?: string
+          current_query_index?: number
           cursor?: string | null
           enabled?: boolean
           id?: number
@@ -327,6 +330,7 @@ export type Database = {
           last_run_at?: string | null
           last_status?: string | null
           min_pending_threshold?: number
+          search_queries?: Json
           search_query?: string
           total_discovered?: number
           updated_at?: string
@@ -334,6 +338,7 @@ export type Database = {
         Update: {
           batch_size?: number
           created_at?: string
+          current_query_index?: number
           cursor?: string | null
           enabled?: boolean
           id?: number
@@ -341,6 +346,7 @@ export type Database = {
           last_run_at?: string | null
           last_status?: string | null
           min_pending_threshold?: number
+          search_queries?: Json
           search_query?: string
           total_discovered?: number
           updated_at?: string
