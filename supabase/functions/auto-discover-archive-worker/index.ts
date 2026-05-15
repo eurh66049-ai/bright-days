@@ -150,9 +150,11 @@ serve(async (req) => {
       archiveQuery = q;
     }
 
+    const scrapeCount = 100; // archive.org scrape يتطلب count >= 100
     const batchSize = Math.min(config.batch_size || 100, 200);
     // الهدف: عدد الكتب الجديدة التي نريد إضافتها هذا التشغيل
-    const targetFresh = Math.max(threshold - pending, batchSize);
+    // نضيف دفعة صغيرة آمنة كل تشغيل حتى لا تتجاوز الدالة حد CPU، ثم يكررها cron/التشغيل اليدوي.
+    const targetFresh = Math.max(threshold - pending, Math.min(batchSize, 30));
 
     // كشف العناوين العشوائية / أسماء الملفات / السلاسل غير المفهومة
     function isRealTitle(t: string | null | undefined, identifier: string): boolean {
@@ -310,35 +312,8 @@ serve(async (req) => {
     // ذاكرة جلسة للعناوين المُطبَّعة (للتكرار النصي)
     const sessionTitles = new Set<string>();
 
-    // كشف تكرار العنوان: يجلب جميع العناوين المُطبَّعة من approved_books و bulk_upload_queue
-    // ويحفظها في ذاكرة الجلسة. يُستدعى مرة واحدة في بداية التشغيل.
-    async function preloadKnownTitles() {
-      const tables: Array<{ table: string; col: string }> = [
-        { table: "approved_books", col: "title" },
-        { table: "bulk_upload_queue", col: "title" },
-      ];
-      for (const { table, col } of tables) {
-        let from = 0;
-        const PAGE = 1000;
-        for (let p = 0; p < 20; p++) {
-          const { data, error } = await supabase
-            .from(table)
-            .select(col)
-            .range(from, from + PAGE - 1);
-          if (error || !data || data.length === 0) break;
-          for (const row of data) {
-            const t = String((row as any)[col] || "").trim();
-            if (t) {
-              const n = normalizeTitle(t);
-              if (n.length >= 4) sessionTitles.add(n);
-            }
-          }
-          if (data.length < PAGE) break;
-          from += PAGE;
-        }
-      }
-    }
-    await preloadKnownTitles();
+    // لا نحمل كل عناوين الموقع هنا لأن ذلك يستهلك CPU كبيراً داخل Edge Function.
+    // كشف تكرار الروابط يتم من قاعدة البيانات، وكشف تكرار العنوان النهائي يتم لاحقاً في bulk-upload-books-ai.
 
 
     // فلترة المعرّفات مقابل قاعدة البيانات قبل أي metadata fetch
