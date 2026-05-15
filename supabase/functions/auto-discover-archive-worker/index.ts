@@ -138,7 +138,11 @@ serve(async (req) => {
     let archiveQuery = DEFAULT_ARABIC_ARCHIVE_QUERY;
     if (userQ && userQ !== DEFAULT_ARABIC_ARCHIVE_QUERY) {
       const looksLikeLucene = /[:()]/.test(userQ);
-      const refined = looksLikeLucene ? userQ : await refineQueryWithMistral(userQ);
+      // للاكتشاف المستمر لا نعتمد على AI لتحويل الكلمات البسيطة؛ أحياناً ينتج استعلاماً ضيقاً
+      // يرجع 0 نتيجة. نبني Lucene ثابتاً يضمن البحث داخل مجموعة الكتب العربية.
+      const refined = looksLikeLucene
+        ? userQ
+        : `(${userQ}) AND collection:booksbylanguage_arabic AND mediatype:texts AND format:PDF`;
       let q = refined;
       if (!/mediatype/i.test(q)) q += " AND mediatype:(texts)";
       if (!/format/i.test(q)) q += " AND format:(PDF)";
